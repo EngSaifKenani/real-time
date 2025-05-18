@@ -1,0 +1,187 @@
+<?php
+
+// هذا الكود يمثل هيكلًا كاملاً للجزء الخلفي لتطبيق دردشة باستخدام Laravel
+
+// -----------------------------
+// 1. إعداد البيئة
+// -----------------------------
+// .env
+// تأكد من وضع هذه القيم:
+
+// BROADCAST_DRIVER=pusher
+// PUSHER_APP_ID=local
+// PUSHER_APP_KEY=local
+// PUSHER_APP_SECRET=local
+// PUSHER_HOST=127.0.0.1
+// PUSHER_PORT=6001
+// PUSHER_SCHEME=http
+// APP_URL=http://127.0.0.1:8000
+
+// -----------------------------
+// 2. التثبيت
+// -----------------------------
+// composer require laravel/sanctum beyondcode/laravel-websockets pusher/pusher-php-server
+// php artisan vendor:publish --provider="Laravel\Sanctum\SanctumServiceProvider"
+// php artisan vendor:publish --provider="BeyondCode\LaravelWebSockets\WebSocketsServiceProvider"
+// php artisan migrate
+
+// -----------------------------
+// 3. Models
+// -----------------------------
+
+// app/Models/Message.php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class Message extends Model
+{
+    protected $fillable = ['sender_id', 'receiver_id', 'body'];
+
+    public function sender()
+    {
+        return $this->belongsTo(User::class, 'sender_id');
+    }
+
+    public function receiver()
+    {
+        return $this->belongsTo(User::class, 'receiver_id');
+    }
+}
+
+// -----------------------------
+// 4. Migration
+// -----------------------------
+
+// database/migrations/xxxx_xx_xx_create_messages_table.php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    public function up(): void
+    {
+        Schema::create('messages', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('sender_id');
+            $table->unsignedBigInteger('receiver_id');
+            $table->text('body');
+            $table->timestamps();
+
+            $table->foreign('sender_id')->references('id')->on('users')->onDelete('cascade');
+            $table->foreign('receiver_id')->references('id')->on('users')->onDelete('cascade');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('messages');
+    }
+};
+
+// -----------------------------
+// 5. Event
+// -----------------------------
+
+// app/Events/PrivateMessageSent.php
+
+namespace App\Events;
+
+use App\Models\Message;
+use Illuminate\Broadcasting\InteractsWithSockets;
+use Illuminate\Broadcasting\PrivateChannel;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
+use Illuminate\Foundation\Events\Dispatchable;
+use Illuminate\Queue\SerializesModels;
+
+class PrivateMessageSent implements ShouldBroadcast
+{
+    use Dispatchable, InteractsWithSockets, SerializesModels;
+
+    public $message;
+
+    public function __construct(Message $message)
+    {
+        $this->message = $message;
+    }
+
+    public function broadcastOn(): PrivateChannel
+    {
+        return new PrivateChannel('chat.' . $this->message->receiver_id);
+    }
+}
+
+// -----------------------------
+// 6. Controller
+// -----------------------------
+
+// app/Http/Controllers/MessageController.php
+
+namespace App\Http\Controllers;
+
+use App\Events\PrivateMessageSent;
+use App\Models\Message;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+
+class MessageController extends Controller
+{
+    public function sendMessage(Request $request)
+    {
+        $request->validate([
+            'receiver_id' => 'required|exists:users,id',
+            'body' => 'required|string',
+        ]);
+
+        $message = Message::create([
+            'sender_id' => Auth::id(),
+            'receiver_id' => $request->receiver_id,
+            'body' => $request->body,
+        ]);
+
+        broadcast(new PrivateMessageSent($message))->toOthers();
+
+        return response()->json($message);
+    }
+
+    public function getMessages($userId)
+    {
+        $authId = Auth::id();
+        $messages = Message::where(function($q) use ($authId, $userId) {
+            $q->where('sender_id', $authId)->where('receiver_id', $userId);
+        })->orWhere(function($q) use ($authId, $userId) {
+            $q->where('sender_id', $userId)->where('receiver_id', $authId);
+        })->orderBy('created_at')->get();
+
+        return response()->json($messages);
+    }
+}
+
+// -----------------------------
+// 7. API Routes
+// -----------------------------
+
+// routes/api.php
+
+use App\Http\Controllers\MessageController;
+use Illuminate\Support\Facades\Route;
+
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/messages', [MessageController::class, 'sendMessage']);
+    Route::get('/messages/{userId}', [MessageController::class, 'getMessages']);
+});
+
+// -----------------------------
+// 8. Broadcast Channel
+// -----------------------------
+
+// routes/channels.php
+
+use Illuminate\Support\Facades\Broadcast;
+
+Broadcast::channel('chat.{receiverId}', function ($user, $receiverId) {
+    return (int) $user->id === (int) $receiverId;
+});
+

@@ -2,6 +2,7 @@
 
 namespace App\Events;
 
+use App\Models\Message;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Broadcasting\PresenceChannel;
@@ -10,38 +11,35 @@ use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
-class PlaygroundEvent implements ShouldBroadcast
+class ChatMessageEvent implements ShouldBroadcast
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
 
     /**
      * Create a new event instance.
      */
-    public function __construct()
+    protected $message;
+
+    public function __construct(Message $message)
     {
-        //
+        $this->message = $message;
     }
 
-    /**
-     * Get the channels the event should broadcast on.
-     *
-     * @return array<int, \Illuminate\Broadcasting\Channel>
-     */
-    public function broadcastOn(): array
+    public function broadcastOn(): PresenceChannel
     {
-        return [
-            new Channel('public-playground.1'),
-        ];
+        return new PresenceChannel('chat.' . $this->message->receiver_id);
     }
 
     public function broadcastAs(): string {
-        return 'playground';
+        return 'chat-message';
     }
 
     public function broadcastWith(): array
     {
         return [
-            'test'=>123
-        ];
+            'message' => $this->message,
+            ];
     }
+
 }
+
